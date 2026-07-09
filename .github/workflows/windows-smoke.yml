@@ -1,0 +1,52 @@
+name: Windows installer smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install-and-launch:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Download latest Sprig installer
+        shell: pwsh
+        run: |
+          Invoke-WebRequest `
+            -Uri "https://github.com/serialsoup/sprig-releases/releases/latest/download/Sprig-Windows.exe" `
+            -OutFile "$env:RUNNER_TEMP\Sprig-Windows.exe"
+
+      - name: Install Sprig
+        shell: pwsh
+        run: |
+          $installer = "$env:RUNNER_TEMP\Sprig-Windows.exe"
+          $process = Start-Process -FilePath $installer -ArgumentList "/S" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Installer exited with $($process.ExitCode)" }
+
+      - name: Verify installed desktop app
+        shell: pwsh
+        run: |
+          $exe = "$env:LOCALAPPDATA\Programs\Sprig\Sprig.exe"
+          if (-not (Test-Path $exe)) {
+            $exe = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Filter Sprig.exe -Recurse -ErrorAction SilentlyContinue |
+              Select-Object -First 1 -ExpandProperty FullName
+          }
+          if (-not $exe -or -not (Test-Path $exe)) { throw "Installed Sprig.exe was not found" }
+
+          $env:SPRIG_DESKTOP_VERIFY = "1"
+          $env:SPRIG_DESKTOP_PORT = "0"
+          $env:SPRIG_USER_DATA_DIR = "$env:RUNNER_TEMP\sprig-user-data"
+          $env:SPRIG_DESKTOP_VERIFY_QUERY = "qaTray=all&packagedVerify=1"
+          $stdout = "$env:RUNNER_TEMP\sprig-stdout.log"
+          $stderr = "$env:RUNNER_TEMP\sprig-stderr.log"
+          $process = Start-Process -FilePath $exe -Wait -PassThru `
+            -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          $output = (Get-Content $stdout -Raw -ErrorAction SilentlyContinue) + `
+            (Get-Content $stderr -Raw -ErrorAction SilentlyContinue)
+          Write-Host $output
+          if ($process.ExitCode -ne 0) { throw "Sprig exited with $($process.ExitCode)" }
+          if ($output -notmatch "Packaged Sprig app verification passed") {
+            throw "Packaged verification did not complete"
+          }
